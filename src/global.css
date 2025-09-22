@@ -7,10 +7,24 @@
     --color-ui-border: #000000;
     --color-ui-hover: #000000;
 
-    --font-family: "Trebuchet MS" sans-serif;
+    --color-palette-dark: #22191c;
+
     --font-size: 20px;
+}
+
+@font-face {
+    font-family: "Pixel";
+    src: url("./res/fonts/Pixellari.ttf") format("truetype");
 }
 
 .hidden {
     display: none !important;
+}
+
+body {
+    background-color: var(--color-palette-dark);
+    color: var(--color-text);
+
+    font-family: Pixel;
+    font-size: var(--font-size);
 }
