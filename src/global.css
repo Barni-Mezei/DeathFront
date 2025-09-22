@@ -1,0 +1,16 @@
+:root {
+    --color-bg: #332211;
+    --color-text: #ffffff;
+    --color-panel-bg: #554433;
+    --color-panel-border: #443322;
+    --color-ui: #000000;
+    --color-ui-border: #000000;
+    --color-ui-hover: #000000;
+
+    --font-family: "Trebuchet MS" sans-serif;
+    --font-size: 20px;
+}
+
+.hidden {
+    display: none !important;
+}
