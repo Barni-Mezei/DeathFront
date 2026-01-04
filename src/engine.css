@@ -1,0 +1,277 @@
+:root {
+    --not-red: #dd4400;
+    --not-green: #88cc00;
+    --not-blue: #00aaff;
+    --not-yellow: #ffdd00;
+
+    --bar-color: #cfc34c;
+    --bar-bg-color: #131411;
+    --bar-bg-color-dark:#1e1f1c;
+
+    --debug-a: #ddd;
+    --debug-gray: #aaa;
+    --debug-bg: #888;
+    --debug-dark-gray: #666;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Main canvas styling */
+canvas#maincv {
+    position: fixed;
+
+    top: 0px;
+    left: 0px;
+
+    width: 100vw;
+    height: 100vh;
+
+    background-color: #000000;
+}
+
+canvas#maincv.pixel-perfect {
+    image-rendering: pixelated;
+}
+
+/* Debug text styling */
+div#debug {
+    position: fixed;
+
+    top: 0px;
+    left: 0px;
+
+    padding-right: 5px;
+    padding-bottom: 5px;
+
+    width: fit-content;
+    max-width: 50vw;
+
+    background-color: #0002;
+    border-bottom-right-radius: 5px;
+
+    font-family: monospace;
+    font-size: 14px;
+
+    z-index: 999;
+}
+
+div#debug * {
+    margin: 0px;
+    padding: 0px;
+
+    color: #ffffff;
+
+    font-size: inherit;
+    font-family: inherit;
+}
+
+div#debug pre#text {
+    overflow-x: hidden;
+}
+
+div#debug .item:first-of-type {
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+    justify-content: stretch;
+    gap: 5px;
+
+    margin-top: 1em;
+}
+
+div#debug input {
+    margin: 0px;
+    margin-left: 1em;
+    padding: 0px;
+
+    border: none;
+    border-radius: 5px;
+    outline: none;
+}
+
+div#debug input[type="number"],
+div#debug input[type="text"] {
+    background-color: transparent;
+    border-bottom: 1px solid #888;
+    border-radius: 0px;
+
+    max-width: 100px;
+}
+
+div#debug input:focus {
+    filter: brightness(1.2);
+}
+
+
+/* Game UI container */
+
+div#ui {
+    position: fixed;
+
+    top: 0px;
+    left: 0px;
+
+    width: 100vw;
+    height: 100vh;
+
+    z-index: 999;
+}
+
+
+/* Notification container */
+#notContainer {
+    position: fixed;
+    display: flex;
+
+    flex-flow: column wrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 5px;
+
+    z-index: 999;
+}
+
+#notContainer .notification {
+    width: auto;
+    height: 30px;
+
+    margin: 0px;
+    padding: 5px;
+
+    border-radius: 10px;
+
+    filter: contrast(1.5) brightness(0.8);
+
+    text-shadow: 0px 0px 10px black;
+
+    color: var(--text-color);
+    background-color: var(--not-normal);
+
+    animation: not-pop-in 0.25s ease;
+}
+
+#notContainer .notification.warning { background-color: var(--not-yelllow); }
+#notContainer .notification.error { background-color: var(--not-red); }
+#notContainer .notification.success { background-color: var(--not-green); }
+#notContainer .notification.info { background-color: var(--not-blue); }
+
+#notContainer .notification.pop-out {
+    animation: not-pop-out 0.25s ease;
+}
+
+#notContainer .notification:first-child {
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
+}
+
+#notContainer .notification p {
+    margin: 0px;
+    padding: 5px;
+
+    font-size: 1em;
+    font-weight: bold;
+
+    text-align: center;
+}
+
+@keyframes not-pop-in {
+    000% {
+        height: 0px;
+        opacity: 0;
+    }
+
+    100% {
+        height: calc( fit-content );
+        opacity: 1;
+    }
+}
+
+@keyframes not-pop-out {
+    000% {
+        height: calc( fit-content );
+        opacity: 1;
+    }
+    
+    100% {
+        height: 0px;
+        margin-bottom: -15px;
+        opacity: 0;
+    }
+}
+
+
+/* Loading bar */
+
+#loading_overlay {
+    position: fixed;
+    display: flex;
+
+    flex-flow: column nowrap;
+    align-items: center;
+    justify-content: center;
+
+    top: 0px;
+    left: 0px;
+
+    width: 100vw;
+    height: 100vh;
+
+    z-index: 9999;
+}
+
+#loading_overlay h1 {
+    color: white;
+
+    text-align: center;
+    font-family: monospace;
+
+    font-size: 48px;
+}
+
+#loading_bar {
+    height: 20px;
+    width: 50vw;
+
+    border: 5px solid var(--bar-bg-color-dark);
+    border-radius: 100vw;
+
+    background-color: var(--bar-bg-color-dark);
+
+    overflow: hidden;
+}
+
+#loading_bar .background {
+    width: 0%;
+    height: 100%;
+
+    background: linear-gradient(-45deg,
+        var(--bar-bg-color) 0%,
+        var(--bar-bg-color) 12.5%,
+        var(--bar-color) 12.5%,
+        var(--bar-color) 37.5%,
+        var(--bar-bg-color) 37.5%,
+        var(--bar-bg-color) 62.5%,
+        var(--bar-color) 62.5%,
+        var(--bar-color) 87.5%,
+        var(--bar-bg-color) 87.5%,
+        var(--bar-bg-color) 100%
+    );
+
+    background-size: 64px 64px;
+
+    animation: bar-scroll 0.5s linear infinite;
+
+    transition: width 0.5s;
+}
+
+@keyframes bar-scroll {
+    0% {
+        background-position-x: 0%;
+    }
+
+    100% {
+        background-position-x: 64px;
+    }
+}

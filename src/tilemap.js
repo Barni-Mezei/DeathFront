@@ -1,0 +1,1898 @@
+/**
+ * Dependencies: grid, vector, resources, camera
+ */
+
+/**
+ * In progress: importing From tiled
+ */
+
+class SimpleTile {
+    id = ""; // Tile name
+    char = null; // Compacted tile ID
+    atlasPos = new Vector();
+    meta = {};
+    texture;
+    pattern;
+
+    constructor(texture, tileId, atlasPos) {
+        this.texture = texture;
+        this.id = tileId;
+        this.atlasPos = atlasPos;
+
+        this.meta = {};
+        this.pattern = ctx.createPattern(texture, "repeat");
+        this.char = null;
+    }
+
+    toObject() {
+        return {
+            id: structuredClone(this.id),
+            meta: structuredClone(this.meta),
+        }
+    }
+}
+
+class SimpleTileMap extends Object2D {
+    // Tile atlas
+    atlasId = "";
+    atlasTexture;
+    atlasData;
+
+    // Sliced tiles
+    tiles = {}
+
+    // Actual placed tiles
+    gridTileSize = new Vector(50, 50);
+    grid;
+
+    /**
+     * 
+     * @param {String} textureId The ID of a loaded resource
+     * @param {Object} atlasData Metadata about the tiles in the specified atlas texture, with the following structure:
+     * - rows (null): Number of tile columns in the atlas texture
+     * - columns (null): Number of tile columns in the atlas texture
+     * - tileWidth (16): Width of a single tile in the atlas texture (in pixels)
+     * - tileHeight (16): Height of a single tile in the atlas texture (in pixels)
+     * - gapX (0): Gap between tiles on the X axis (in pixels)
+     * - gapY (00): Gap between tiles on the Y axis (in pixels)  
+     * 
+     * (rows + columns) or (tileWidth + tileHeight) could be set to null, if the other one is specified,
+     * and the function will calculate the missing values.
+     * @param {Number} width Width of the tilemap (in tiles)
+     * @param {Number} height Height of the tilemap (in tiles)
+     */
+    constructor(textureId, atlasData, width, height) {
+        super(new Vector(), new Vector(1, 1));
+
+        this.atlasId = textureId;
+        this.atlasTexture = new Texture(textureId);
+
+        this.atlasData = {
+            rows: null, // Auto complete if tile width is present
+            columns: null,
+            tileWidth: 16, // Autocomplete if rows a re present
+            tileHeight: 16,
+            gapX: 0,
+            gapY: 0,
+        }
+
+        this._setAtlasData(atlasData);
+        
+        this.tiles = SimpleTileMap.sliceTiles(this.atlasTexture.image, this.atlasData);
+
+        this.grid = new Grid(width, height, {
+            id: Object.keys(this.tiles)[0],
+            meta: {},
+        }, function (tile) {
+            return tile.id;
+        });
+
+        this._updateTileMapSize();
+        this._updateTileSizes();
+    }
+
+    /**
+     * Sets this tile map's tile atlas data, by calculating any missing fields
+     * @param {Object} atlasData An atlas data object, with potentially missing fields
+     */
+    _setAtlasData(atlasData) {
+        // Set atlas data
+        for (let key in atlasData) {
+            this.atlasData[key] = atlasData[key];
+        }
+
+        // Complete atlas size
+        if (this.atlasData.rows === null) {
+            this.atlasData.rows = (this.atlasTexture.image.height + this.atlasData.gapY) / (this.atlasData.tileHeight + this.atlasData.gapY);
+            this.atlasData.columns = (this.atlasTexture.image.width + this.atlasData.gapX) / (this.atlasData.tileWidth + this.atlasData.gapX);
+        }
+
+        // Complete tile size
+        if (this.atlasData.tileWidth === null) {
+            this.atlasData.tileWidth = (this.atlasTexture.image.width + this.atlasData.gapX) / this.atlasData.columns;
+            this.atlasData.tileHeight = (this.atlasTexture.image.height + this.atlasData.gapY) / this.atlasData.rows;
+        }
+    }
+
+    /**
+     * Calculates the size of the bounding box of the tilemap, in world space
+     */
+    _updateTileMapSize() {
+        // Update map size
+        this.size.x = this.grid.width * this.gridTileSize.x;
+        this.size.y = this.grid.height * this.gridTileSize.y;
+    }
+
+    /**
+     * Udates the tile pattern sizes, to match the tilemap's, onscreen tile size
+     */
+    _updateTileSizes() {
+        // Update tile pattern sizes
+        for (let tileId in this.tiles) {
+            let tile = this.tiles[tileId];
+
+            let offCanvas = new OffscreenCanvas(this.gridTileSize.x, this.gridTileSize.y);
+            let offCtx = offCanvas.getContext("2d");
+            offCtx.imageSmoothingEnabled = !c.isPixelPerfect;
+
+            offCtx.drawImage(
+                tile.texture,
+                0, 0, offCanvas.width, offCanvas.height
+            );
+
+            this.tiles[tileId].texture = offCanvas;
+            this.tiles[tileId].pattern = offCtx.createPattern(offCanvas, "repeat");
+        }
+    }
+
+    /**
+     * Returns with an temporary Id for a tile, based on its atlas position
+     */
+    static _getTileIdFromCoords(x, y) {
+        return "tile_" + x + "_" + y;
+    }
+
+    /**
+     * Slices a tilemap into induvidual tiles
+     * @param {Image} image A canvas drawable object, that will get sliced into tiles, based on the atlasData
+     * @param {Object} atlasData An object specifying the properties of the tile atlas
+     * @returns {Object} An object, where each key is a tile's ID and the value is a new tile 
+     */
+    static sliceTiles(image, atlasData) {
+        let tiles = {};
+
+        for (let y = 0; y < atlasData.rows; y++) {
+            for (let x = 0; x < atlasData.columns; x++) {
+                let tileId = SimpleTileMap._getTileIdFromCoords(x, y);
+                let tileTexture = Texture.canvasFromImage(image, {
+                    width: atlasData.tileWidth,
+                    height: atlasData.tileHeight,
+                    x: atlasData.tileWidth * x + Math.min(0, atlasData.gapX * (x - 1)),
+                    y: atlasData.tileHeight * y + Math.min(0, atlasData.gapY * (y - 1)),
+                }, false);
+
+                tiles[tileId] = new SimpleTile(tileTexture, tileId, new Vector(x, y));
+            }
+        }
+
+        return tiles;
+    }
+
+    static importTilemap(atlasTextureId, width, height, importData) {
+        if (!("atlasData" in importData)) throw Error('Missing property "atlasData" in importData!');
+
+        let newTilemap = new SimpleTileMap(atlasTextureId, importData.atlasData, width, height);
+
+        let tileChars = {};
+
+        // Import tiles from the atlas texture
+        if ("tiles" in importData) {
+            for (let tileId in importData.tiles) {
+                let currentTile = importData.tiles[tileId];
+                tileChars[currentTile.char] = currentTile.id;
+                newTilemap.renameTile(tileId, currentTile.id);
+                for (let key in currentTile.meta) {
+                    newTilemap.setTileMeta(currentTile.id, key, currentTile.meta[key]);
+                    newTilemap.tiles[currentTile.id].char = currentTile?.char ?? null;
+                }
+            }
+
+            // Default to the first tile
+            newTilemap.grid.defaultValue = Object.values(newTilemap.tiles)[0].toObject();
+        }
+
+        // Import tiles to the tile grid
+        if ("grid" in importData) {
+            // Set default from the grid
+            if ("default" in importData.grid) {
+                newTilemap.grid.defaultValue = newTilemap.tiles[importData.grid.default].toObject();
+            }
+
+            newTilemap.grid.resize(importData.grid.width, importData.grid.height);
+
+            for (let y = 0; y < importData.grid.data.length; y++) {
+                let row = importData.grid.data[y];
+                for (let i = 0; i < row.length; i += 2) {
+                    let tileChar = row[i] + row[i+1];
+                    let tilePos = new Vector(i/2, y);
+                    let tileId = tileChars[tileChar];
+
+                    newTilemap.setTileAt(tilePos, tileId);
+                }
+            }
+        }
+
+        return newTilemap;
+    }
+
+    /**
+     * 
+     * @param {*} atlasTextureId name of the loaded atlas texture to use in the tilemap
+     * @param {*} importData 
+     * @returns 
+     */
+    static importFromTiled(atlasTextureId, importData) {
+        //console.dir(importData.layers);
+
+        let atlasData = {
+            tileWidth: importData.tilewidth,
+            tileHeight: importData.tileheight,
+            gapX: 0,
+            gapY: 0,
+        }
+
+        let newTilemap = new SimpleTileMap(atlasTextureId, atlasData, importData.width, importData.height);
+
+        // Find the first tile layer
+        let layerName = "tilelayer";
+        let layerIndex = importData.layers.reduce(
+            function(result, current, index) {
+                if (index == 1) {
+                    return result.type == layerName ? 0 : (current.type == layerName ? 1 : null);
+                } else {
+                    return result === null ? (current.type == layerName ? index : null) : result;
+                }
+            },
+        );
+
+        // No tile layer found
+        if (layerIndex === null) {
+            return newTilemap;
+        }
+
+        let tileLayer = importData.layers[layerIndex];
+
+        newTilemap.grid.defaultValue = {id: null, meta: {}};
+
+        for (let i = 0; i < tileLayer.data.length; i++) {
+            let tilePos = Grid.indexToCoordinate(i, tileLayer.width);
+            let tileId = SimpleTileMap._getTileIdFromCoords( ...Grid.indexToCoordinate(tileLayer.data[i] - 1, newTilemap.atlasData.columns).toArray() );
+
+            newTilemap.setTileAt(tilePos, tileId);
+        }
+
+        return newTilemap;
+    }
+
+    /**
+     * Returns with a json object, containing all necesary data from importing it later
+     * @param {String|null} fileName (optional) The file name, to download under 
+     * @returns 
+     */
+    exportTilemap(fileName = null) {
+        let out = {
+            atlasData: this.atlasData,
+            tiles: {},
+            grid: {
+                width: this.grid.width,
+                height: this.grid.height,
+                default: this.grid.defaultValue.id,
+                data: [],
+            },
+        }
+
+        let tileChars = {};
+
+        // Add tiles to the export
+        let i = 0;
+        for (let tileId in this.tiles) {
+            let tile = this.tiles[tileId];
+            let defaultTileId = SimpleTileMap._getTileIdFromCoords(tile.atlasPos.x, tile.atlasPos.y);
+            if (tile.id == defaultTileId) continue;
+
+            if (tile.char === null) {
+                // 8697 possible tile IDs (from chr: 33 '!' to chr: 126 '~')
+                tileChars[tileId] = String.fromCharCode(33 + Math.floor(i/93)) + String.fromCharCode(33 + (i % 93));
+            } else {
+                tileChars[tileId] = tile.char;
+            }
+
+            out.tiles[defaultTileId] = {
+                char: tileChars[tileId],
+                id: tile.id,
+                meta: tile.meta,
+            }
+
+            i++;
+        }
+
+        // Export grid data
+        let oldY = 0;
+        let row = "";
+
+        this.grid.forEach(function(x, y, tile) {
+            if (y != oldY) {
+                out.grid.data.push(row);
+                row = "";
+                oldY = y;
+            }
+
+            row += tileChars[tile.id];
+        });
+
+        // Add last row
+        if (row.length > 0) out.grid.data.push(row);
+
+        if (fileName) {
+            FileResource.downloadFile( fileName + ".json", JSON.stringify(out) );
+        } else {
+            return out;
+        }
+    }
+
+    /**
+     * Sets a tile's ID in the tile atlas
+     * @param {String} tileId The ID of the tile
+     * @param {String} newTileId The new ID of the tile
+     */
+    renameTile(tileId, newTileId) {
+        if (!(tileId in this.tiles)) return;
+
+        // Update tiles on the tilemap
+        this.grid.map(function (x, y, tile) {
+            if (tile.id == tileId) tile.id = newTileId;
+            return tile
+        });
+
+        // Add new tile
+        this.tiles[newTileId] = this.tiles[tileId];
+        this.tiles[newTileId].id = newTileId;
+
+        // Remove old tile
+        delete this.tiles[tileId];
+    }
+
+    /**
+     * Sets a tile's ID in the tile atlas
+     * @param {Vector} atlasPos Tile position in the tile atlas
+     * @param {String} newTileId The new ID of the tile
+     */
+    renameTilebyAtlasPos(atlasPos, newTileId) {
+        for (let currentTileId in this.tiles) {
+            let tile = this.tiles[currentTileId];
+            if (tile.atlasPos.isEqual(atlasPos)) {
+                // Add new tile
+                this.tiles[newTileId] = tile;
+                this.tiles[newTileId].id = newTileId;
+
+                // Remove old tile
+                delete this.tiles[currentTileId];
+            };
+        }
+    }
+
+    /**
+     * Fills the entire tilemap with the specified tile
+     * @param {String} tileId The ID of a tile
+     */
+    fill(tileId) {
+        this.grid.fill(this.getTileById(tileId).toObject());
+    }
+
+    /**
+     * Sets a tile on the tilemap
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @param {String} tileId The ID of the tile to set
+     * @param {Object} tileMeta A the tile's metadata (WARNING: If set, it overwrites all existing metadata in that cell!)
+     */
+    setTileAt(tilePos, tileId, tileMeta = null) {
+        let tile = this.grid.getCell(tilePos.x, tilePos.y);
+        tile.id = tileId;
+        tile.meta = tileMeta ?? {};
+        this.grid.setCell(tilePos.x, tilePos.y, tile);
+    }
+
+    /**
+     * Set a tile's metadata on the tilemap
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @param {String} key The key to set the value at
+     * @param {*} value The value to set
+     */
+    setLocalTileMeta(tilePos, key, value) {
+        let tile = this.grid.getCell(tilePos.x, tilePos.y);
+        tile.meta[key] = value;
+        this.grid.setCell(tilePos.x, tilePos.y, tile);
+    }
+
+    /**
+     * Sets a tile's metadata in the tile atlas
+     * @param {String} tileId The ID of the tile, whose data will be set
+     * @param {String} key The key to set the value at
+     * @param {*} value The value to set
+     */
+    setTileMeta(tileId, key, value) {
+        if (!(tileId in this.tiles)) return;
+
+        this.tiles[tileId].meta[key] = value;
+    }
+
+    /**
+     * Sets a tile's metadata in the tile atlas
+     * @param {Vector} atlasPos Tile position in the tile atlas
+     * @param {String} key The key to set the value at
+     * @param {*} value The value to set
+     */
+    setTileMetaAt(atlasPos, key, value) {
+        for (let tileId in this.tiles) {
+            let tile = this.tiles[tileId];
+            if (tile.atlasPos.isEqual(atlasPos)) {
+                tile.meta[key].meta = value;
+            };
+        }
+    }
+
+
+    /**
+     * Returns with a tile from the texture atlas, by its position
+     * @param {Vector} atlasPos A vector, representing a texture atlas coordinate
+     * @returns {Tile|null} The tile from the atlas, at the specified position, or null if no tile was found
+     */
+    getTileById(tileId) {
+        if (!(tileId in this.tiles)) return null;
+
+        return this.tiles[tileId];
+    }
+
+    /**
+     * Returns with a tile from the texture atlas, by its position
+     * @param {Vector} atlasPos Tile position in the tile atlas
+     * @returns {Tile|null} The tile from the atlas, at the specified position, or null if no tile was found
+     */
+    getTileByAtlasPos(atlasPos) {
+        for (let tileId in this.tiles) {
+            let tile = this.tiles[tileId];
+            if (tile.atlasPos.isEqual(atlasPos)) return tile;
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns with a tile ID from the tilemap
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @returns {String|null} Returns with a tile ID, or null
+     */
+    getTileAt(tilePos) {
+        return this.grid.getCell(tilePos.x, tilePos.y, null)?.id ?? null;
+    }
+
+    /**
+     * Returns with a tile's local metadata from the tilemap
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @returns {Object|null} Returns with an object, containing the tile's metadata, or null
+     */
+    getLocalTileMeta(tilePos) {
+        return this.grid.getCell(tilePos.x, tilePos.y, null)?.meta ?? null;
+    }
+
+    render(gridColor = null, gridThickness = null) {
+        let self = this;
+
+        this.grid.forEach(function (x, y, tile) {
+            if (tile.id === null) return;
+
+            let tilePos = self.pos.add(new Vector(x, y).mult(self.gridTileSize));
+
+            /*ctx.drawImage(
+                self.getTileById(tile.id).texture,
+                ...camera.w2c(tilePos).round().toArray(), ...camera.w2cs(self.gridTileSize).round().toArray()
+            );*/
+
+            ctx.drawImage(
+                self.getTileById(tile.id).texture,
+                ...camera.w2cf(tilePos.round(settings.debug.a), self.gridTileSize.round(settings.debug.a))
+            );
+
+            //ctx.fillStyle = self.getTileById(tile.id).pattern;
+            //ctx.fillRect(...camera.w2c(tilePos).round().toArray(), ...camera.w2cs(self.gridTileSize).round().toArray());
+        });
+
+        if (gridColor != null) {
+            ctx.strokeStyle = gridColor;
+            ctx.lineWidth = camera.w2csX(gridThickness);
+            ctx.lineJoin = "butt";
+            ctx.lineCap = "butt";
+
+            // Horizontal lines
+            for (let y = 0; y <= this.grid.height; y++) {
+                ctx.beginPath();
+                ctx.moveTo(...camera.w2cXY(this.left, this.pos.y + y * this.gridTileSize.y));
+                ctx.lineTo(...camera.w2cXY(this.right, this.pos.y + y * this.gridTileSize.y));
+                ctx.stroke();
+            }
+
+            // Vertical lines
+            for (let x = 0; x <= this.grid.width; x++) {
+                ctx.beginPath();
+                ctx.moveTo(...camera.w2cXY(this.pos.x + x * this.gridTileSize.x, this.top));
+                ctx.lineTo(...camera.w2cXY(this.pos.x + x * this.gridTileSize.x, this.bottom));
+                ctx.stroke();
+            }
+        }
+    }
+
+    update() {
+
+    }
+}
+
+
+
+
+
+/**
+ * Tile in the tileset of the tilemap
+ */
+class Tile {
+    /**
+    Neighbor indexes are in a clockwise order:  
+    - 0 top,
+    - 1 top-right,
+    - 2 right,
+    - 3 bottom-right,
+    - 4 bottom,
+    - 5 bottom-left,
+    - 6 left
+    - 7 top-left,
+
+    `7 0 1`  
+    `6 . 2`  
+    `5 4 3`  
+
+    Edge values can be anything. Example:  
+    `autotile = {"terrain": [1, 0, 2, 0, 1, 0, 2, 0]}`
+    */
+    autotile = {};
+
+    /**
+     * The ID of the tile
+     */
+    id = "";
+
+    /**
+     * Atlas coordinate
+     */
+    atlasPos = new Vector();
+
+    /**
+     * Metadata about the tile
+     */
+    meta = {};
+
+    /**
+     * The actual texture of the tile
+     */
+    texture;
+
+    /**
+     * The patter, which can be used a fillStyle to render this tile
+     */
+    pattern;
+
+    /**
+     * @param {Texture} texture A texture instance
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {Vector} atlasPos 
+     */
+    constructor(texture, tileId, atlasPos) {
+        this.texture = texture;
+        this.id = tileId;
+        this.atlasPos = atlasPos;
+
+        this.meta = {};
+        this.autotile = {};
+
+        this.updatePattern();
+    }
+
+    /**
+     * Generates a new canvas fill pattern from the tile's texture
+     */
+    updatePattern() {
+        this.pattern = ctx.createPattern(this.texture.image, "repeat");
+    }
+
+    /**
+     * Sets autotile rules for this tile, at the specified layer
+     * @param {String} layerId The ID of an autotile layer
+     * @param {Array} array An array of edge values
+     */
+    setAutotile(layerId, array) {
+        this.autotile[layerId] = array;
+    }
+
+    /**
+     * Returns with the edge values of this tile at the specified autotile layer
+     * @param {String} layerId The ID of an autotile layer
+     * @returns {Array|null} The edge values for the specified layer or null if no layer was found
+     */
+    getAutotile(layerId) {
+        if (layerId === null) return this.autotile;
+        
+        if (layerId in this.autotile) return this.autotile[layerId];
+
+        return null;
+    }
+
+    /**
+     * Converts this object in to a json compatible one
+     * @returns {Object} Object representation of this tile
+     */
+    toObject() {
+        return {
+            id: structuredClone(this.id),
+            meta: structuredClone(this.meta),
+            autotile: structuredClone(this.autotile),
+        }
+    }
+
+    update() {
+        this.texture.update();
+    }
+}
+
+
+class TileMap extends Object2D {
+    #layers = {};
+
+    /**
+     * @readonly
+     */
+    get layers() { return this.#layers; }
+
+    #gridTileSize = new Vector(50, 50);
+
+    /**
+     * @param {Vector} value The width and height of a single tile (in world space)
+     */
+    set tileSize(value) { return this.#gridTileSize = value; }
+    get tileSize() { return this.#gridTileSize; }
+
+    /**
+     * @type {Number} The width of a single tile (in world space)
+     */
+    get tileWidth() { return this.#gridTileSize.x; }
+
+    /**
+     * @readonly
+     * @type {Number} The height of a single tile (in world space)
+     */
+    get tileHeight() { return this.#gridTileSize.y; }
+
+    #width = 0;
+    #height = 0;
+
+    /**
+     * @readonly
+     * Width of the tilemap (in tiles)
+     */
+    get width() { return this.#width; }
+
+    /**
+     * @readonly
+     * Height of the tilemap (in tiles)
+     */
+    get height() { return this.#height; }
+
+    /**
+     * The available tiles in the atlas texture
+     */
+    #tiles = {};
+
+    /**
+     * @readonly
+     */
+    get tiles() { return this.#tiles; }
+
+    /**
+     * @readonly
+     * Number of tiles in the tileset
+     */
+    get tileCount() { return Object.keys( this.#tiles ).length; }
+
+    /**
+     * @readonly
+     * An array with all tile ids found in the tileset
+     */
+    get tileIds() { return Object.keys( this.#tiles ); }
+
+    /**
+     * @type {String|null} The default tile ID to set to new layers
+     */
+    defaultTile = null;
+
+    settings = {
+        /**
+         * If set, it enables **automatic re-calculation of collision and navigation objects**
+         * It is recommended to turn off, before large grid operations on the collision and navigation layers
+         * then turning it on and calling the updates manually.
+         */
+        autoUpdate: false,
+    }
+
+    /**
+     * 
+     * @param {String} atlasTextureId The ID of a loaded resource
+     * @param {Object} atlasData Metadata about the tiles in the specified atlas texture, with the following structure:
+     * - rows (null): Number of tile columns in the atlas texture
+     * - columns (null): Number of tile columns in the atlas texture
+     * - tileWidth (16): Width of a single tile in the atlas texture (in pixels)
+     * - tileHeight (16): Height of a single tile in the atlas texture (in pixels)
+     * - gapX (0): Gap between tiles on the X axis (in pixels)
+     * - gapY (0): Gap between tiles on the Y axis (in pixels)  
+     * 
+     * (rows + columns) or (tileWidth + tileHeight) could be set to null, if the other ones are specified.
+     * @param {Number} width Width of the tilemap (in tiles)
+     * @param {Number} height Height of the tilemap (in tiles)
+     */
+    constructor(atlasTextureId, atlasData, width, height) {
+        super(new Vector(), new Vector(1, 1));
+
+        // Default value for the tilemap's settings
+        this.settings = {
+            autoUpdate: false,
+        }
+
+        this.defaultTile = null;
+
+        this.#width = width;
+        this.#height = height;
+
+        this.atlasId = atlasTextureId;
+        this.atlasTexture = new Texture(atlasTextureId, null);
+
+        this.atlasData = {
+            rows: null, // Auto complete if tile width is present
+            columns: null,
+            tileWidth: 16, // Autocomplete if rows a re present
+            tileHeight: 16,
+            gapX: 0,
+            gapY: 0,
+        }
+
+        this._setAtlasData(atlasData);
+
+        if (this.atlasTexture.isAnimated) {
+            this.atlasTexture.animData.gapX = (this.atlasData.columns - 1) * this.atlasData.tileWidth;
+            this.atlasTexture.animData.gapY = (this.atlasData.rows - 1) * this.atlasData.tileHeight;
+        }
+
+        this.#tiles = TileMap.sliceTiles(this.atlasTexture, this.atlasData);
+
+        this.#layers = {};
+        this.addLayer("graphics");
+        this.addLayer("collision");
+        this.addLayer("navigation");
+
+        this._updateSize();
+        //this._updateTilePatterns();
+    }
+
+    /**
+     * Translates the position of a tile on the tilemap in to world space
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @returns {Vector} The world space coordinate of the top left corner of the specified tile
+     */
+    tileToWorld(tilePos) {
+        return this.pos.add(tilePos.mult(this.#gridTileSize));
+    }
+
+    /**
+     * Translates the position of a tile on the tilemap in to world space
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @returns {Vector} The world space coordinate of the center of the specified tile
+     */
+    tileCenterToWorld(tilePos) {
+        return this.pos.add(tilePos.mult(this.#gridTileSize).add(this.#gridTileSize.mult(0.5)));
+    }
+
+    /**
+     * Returns with the tile under neath the specified position.
+     * @param {Vector} pos A world space coordinate, above the tilemap
+     * @returns {Vector} A tile position on the tilemap (might be out of bounds!)
+     */
+    worldToTileCenter(pos) {
+        return pos.mult(new Vector(1 / this.tileWidth, 1 / this.tileHeight)).round();
+    }
+
+    /**
+     * Sets this tile map's tile atlas data, by calculating any missing fields
+     * @param {Object} atlasData An atlas data object, with potentially missing fields
+     */
+    _setAtlasData(atlasData) {
+        // Set atlas data
+        for (let key in atlasData) {
+            this.atlasData[key] = atlasData[key];
+        }
+
+        let imageWidth = this.atlasTexture?.cropData?.width ?? this.atlasTexture.image.width;
+        let imageHeight = this.atlasTexture?.cropData?.height ?? this.atlasTexture.image.height;
+
+        // Complete atlas size
+        if (!this.atlasData.rows) {
+            this.atlasData.rows = (imageHeight + this.atlasData.gapY) / (this.atlasData.tileHeight + this.atlasData.gapY);
+            this.atlasData.columns = (imageWidth + this.atlasData.gapX) / (this.atlasData.tileWidth + this.atlasData.gapX);
+        }
+
+        // Complete tile size
+        if (!this.atlasData.tileWidth) {
+            this.atlasData.tileWidth = (this.atlasTexture.image.width + this.atlasData.gapX) / this.atlasData.columns;
+            this.atlasData.tileHeight = (this.atlasTexture.image.height + this.atlasData.gapY) / this.atlasData.rows;
+        }
+    }
+
+    /**
+     * Calculates the size of the bounding box of the tilemap, in world space
+     */
+    _updateSize() {
+        // Update object size
+        this.size = new Vector(
+            this.#width,
+            this.#height
+        ).mult( this.tileSize );
+    }
+
+    /**
+     * Udates the tile pattern sizes, to match the tilemap's, onscreen tile size
+     */
+    _updateTilePatterns() {
+        // Update tile pattern sizes
+        for (let tileId in this.#tiles) {
+            let tile = this.#tiles[tileId];
+
+            let offCanvas = new OffscreenCanvas(...camera.w2csXY(this.tileWidth, this.tileHeight));
+            let offCtx = offCanvas.getContext("2d");
+            
+            offCtx.imageSmoothingEnabled = !c.isPixelPerfect;
+            offCtx.imageSmoothingQuality = "low";
+
+            offCtx.drawImage(
+                tile.texture,
+                0, 0, offCanvas.width, offCanvas.height
+            );
+
+            /*this.#tiles[tileId].texture = offCanvas;
+            this.#tiles[tileId].pattern = offCtx.createPattern(offCanvas, "repeat");*/
+
+            //tile.texture = offCanvas;
+            tile.pattern = offCtx.createPattern(offCanvas, "repeat");
+        }
+    }
+
+    /**
+     * Slices a tilemap into induvidual tiles
+     * @param {Texture} texture A loaded texture instance
+     * @param {Object} atlasData An object specifying the properties of the tile atlas
+     * @returns {Object} An object, where each key is a tile's ID and the value is a new tile 
+     */
+    static sliceTiles(texture, atlasData) {
+        let tiles = {};
+
+        for (let y = 0; y < atlasData.rows; y++) {
+            for (let x = 0; x < atlasData.columns; x++) {
+                let tileId = SimpleTileMap._getTileIdFromCoords(x, y);
+                let tileImage = Texture.canvasFromImage(texture.image, {
+                    width: atlasData.tileWidth,
+                    height: atlasData.tileHeight,
+                    x: atlasData.tileWidth * x + Math.min(0, atlasData.gapX * (x - 1)),
+                    y: atlasData.tileHeight * y + Math.min(0, atlasData.gapY * (y - 1)),
+                }, texture.animData);
+
+                let tileTexture = new Texture(texture.resourceId, null);
+                tileTexture.image = tileImage;
+
+                if (texture.isAnimated) {
+                    tileTexture.cropData = {
+                        x: 0,
+                        y: 0,
+                        width: atlasData.tileWidth,
+                        height: atlasData.tileHeight
+                    }
+                    
+                    tileTexture.animData.wrap = 0;
+                    tileTexture.animData.direction = 1;
+                }
+
+                tiles[tileId] = new Tile(tileTexture, tileId, new Vector(x, y));
+            }
+        }
+
+        return tiles;
+    }
+
+    static importFromTiled(atlasTextureId, importData) {
+        //console.dir(importData.layers);
+
+        let atlasData = {
+            tileWidth: importData.tilewidth,
+            tileHeight: importData.tileheight,
+            gapX: 0,
+            gapY: 0,
+        }
+
+        let newTilemap = new TileMap(atlasTextureId, atlasData, importData.width, importData.height);
+
+        // Remove all layers
+        newTilemap.removeLayer("graphics_0");
+        newTilemap.removeLayer("collision_0");
+        newTilemap.removeLayer("navigation_0");
+
+        // Re-add the layers from the save file
+        for (let layer of importData.layers) {
+            if (layer.type == "tilelayer") {
+                let newLayer = newTilemap.addLayer("graphics");
+
+                let dataGrid = Grid.fromArray(layer.data, layer.width);
+
+                dataGrid.map(function (x, y, tileId) {
+                    let tilePos = Grid.indexToCoordinate(tileId - 1, newTilemap.atlasData.columns);
+                    let correctTileId = SimpleTileMap._getTileIdFromCoords(tilePos.x, tilePos.y);
+                    return {
+                        id: tileId == 0 ? null : correctTileId,
+                        meta: {},
+                    }
+                });
+
+                newTilemap.setGrid(newLayer, dataGrid);
+            }
+
+            function transformToWorldSpace(tilemap, layer, importData, x, y) {
+                return new Vector(
+                    ((x / importData.tilewidth) + (layer.offsetx / importData.tilewidth)) * tilemap.tileWidth + tilemap.pos.x,
+                    ((y / importData.tileheight) + (layer.offsety / importData.tileheight)) * tilemap.tileHeight + tilemap.pos.y,
+                );
+            }
+
+            if (layer.type == "objectgroup") {
+                let newLayer = newTilemap.addLayer("navigation");
+                for (let object of layer.objects) {
+                    if ("point" in object) {
+                        console.log("Point at: ", object.x, object.y, object.width, object.height);
+                        newTilemap.addObject(
+                            newLayer,
+                            new Point(...transformToWorldSpace(newTilemap, layer, importData, object.x, object.y).toArray()),
+                        );
+                    } else if ("polygon" in object) {
+                        console.log("Path at: ", object.x, object.y, object.width, object.height);
+
+                        for (let i in object.polygon) {
+                            object.polygon[i] = transformToWorldSpace(
+                                newTilemap,
+                                layer,
+                                importData,
+                                object.polygon[i].x + object.x,
+                                object.polygon[i].y + object.y,
+                            );
+                        }
+
+                        let newPath = new Path(object.polygon);
+
+                        newTilemap.addObject(newLayer, newPath);
+
+                    } else {
+                        console.log("Rectangle at: ", object.x, object.y, object.width, object.height);
+                    }
+                }
+
+
+                /*let newLayer = newTilemap.addLayer("graphics");
+
+                let dataGrid = Grid.fromArray(layer.data, layer.width);
+
+                dataGrid.map(function (x, y, tileId) {
+                    let tilePos = Grid.indexToCoordinate(tileId - 1, newTilemap.atlasData.columns);
+                    let correctTileId = SimpleTileMap._getTileIdFromCoords(tilePos.x, tilePos.y);
+                    return {
+                        id: tileId == 0 ? null : correctTileId,
+                        meta: {},
+                    }
+                });
+
+                newTilemap.setGrid(newLayer, dataGrid);*/
+            }
+
+        }
+
+        return newTilemap;
+    }
+
+    static exportToTiled(fileName) {throw Error("Not implemented")}
+
+    /**
+     * Creates a new layer in the tilemap
+     * @param {String} type The layer type. Possible values:
+     * - `graphics`: Visible, displays graphical tiles
+     * - `collision`: Invisible, used to simulate collisions with the tilemap
+     * - `navigation`: Invisible, guides pathfinding agents
+     * @returns {String|null} Returns the ID of the new layer or null, if the layer could be created
+     */
+    addLayer(layerType) {
+        if (!["graphics", "collision", "navigation"].includes(layerType)) return null;
+
+        let sameTypeLayers = [];
+
+        for (let layerId in this.#layers) {
+            if (layerId.search(new RegExp(`${layerType}_[0-9]+`)) == 0) sameTypeLayers.push(layerId);
+        }
+
+        // Assure Z index correctness between layers
+        sameTypeLayers.sort();
+
+        let lastLayer = sameTypeLayers[sameTypeLayers.length - 1] ?? "placeholder_-1";
+        let lastLayerIndex = parseInt( lastLayer.split("_")[1] );
+        let newLayerId = `${layerType}_${lastLayerIndex + 1}`;
+
+        if (layerType == "graphics") {
+            this.#layers[newLayerId] = {
+                grid: new Grid(this.#width, this.#height, {
+                    id: this.defaultTile,
+                    meta: {},
+                }, function (tile) {
+                    return tile.id;
+                }),
+
+                objects: [],
+            }
+
+            this.#layers[newLayerId].grid.defaultValue = {
+                id: this.defaultTile,
+                meta: {},
+            }
+        }
+
+        if (layerType == "collision") {
+            this.#layers[newLayerId] = {
+                grid: new Grid(this.#width, this.#height,
+                    false, // Tile value
+                function (tile) {
+                    return tile;
+                }),
+
+                objects: [],
+            }
+
+            this.#layers[newLayerId].grid.defaultValue = false;
+        }
+
+        if (layerType == "navigation") {
+            this.#layers[newLayerId] = {
+                grid: new Grid(this.#width, this.#height,
+                    0, // Tile value
+                function (tile) {
+                    return tile;
+                }),
+
+                objects: [],
+            }
+
+            this.#layers[newLayerId].grid.defaultValue = 0;
+        }
+
+        return newLayerId;
+    }
+
+    /**
+     * Removes an already existing tilemap layer
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     */
+    removeLayer(layerId) {
+        if (!(layerId in this.#layers)) return;
+
+        delete this.#layers[layerId];
+    }
+
+    /**
+     * Returns an array of layer ids, in the correct rendering order (graphics, collision, navigation)
+     * @param {String|null} layerType If specified, only this types of layers will be returned
+     * @returns {Array} Returns the array of layer ids, in the correct rendering order
+     */
+    getLayers(layerType = null) {
+        let out = [];
+        
+        if (layerType === null) {
+            let graphicsLayers = [];
+            let collisionLayers = [];
+            let navigationLayers = [];
+    
+            for (let layerId in this.#layers) {
+                if (layerId.search(/graphics_[0-9]+/g) == 0) graphicsLayers.push(layerId);
+                if (layerId.search(/collision_[0-9]+/g) == 0) collisionLayers.push(layerId);
+                if (layerId.search(/navigation_[0-9]+/g) == 0) navigationLayers.push(layerId);
+            }
+
+            // Assure Z index correctness between layers
+            graphicsLayers.sort();
+            collisionLayers.sort();
+            navigationLayers.sort();
+
+            // Assure Z index correctness between layer types (used when debug rendering)
+            out = out.concat(graphicsLayers).concat(collisionLayers).concat(navigationLayers);
+        } else {
+            for (let layerId in this.#layers) {
+                //console.log(layerId);
+                if (layerId.search(new RegExp(`${layerType}_[0-9]+`)) == 0) out.push(layerId);
+            }
+
+            // Assure Z index correctness between layers
+            out.sort();
+        }
+
+        return out;
+    } 
+
+    /**
+     * Returns with the first layer in the tilemap, or null if none found (it is NOT necessary the first by rendering order)
+     * @returns {Object|null}
+     */
+    getFirstLayer() {
+        if (Object.keys(this.#layers).length == 0) return null;
+
+        return this.#layers[ Object.keys(this.#layers)[0] ];
+    }
+
+    /** Replaces an existing layer's grid, with the specified one
+     * @param {Grid} grid The grid, to replace to
+     */
+    setGrid(layerId, grid) {
+        if (!(layerId in this.#layers)) return;
+
+        this.#layers[layerId].grid = grid;
+    }
+
+    /** Returns with the specified layer's grid object, or null if the layer is invalid
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     * @returns {Object|null} The layer's grid or null
+     */
+    getGrid(layerId) {
+        return this.#layers[layerId]?.grid ?? null;
+    }
+
+    /** Appends an object to an existing layer's objects array
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     * @param {Object} object The object, to add to the layer
+     */
+    addObject(layerId, object) {
+        if (!(layerId in this.#layers)) return;
+
+        this.#layers[layerId].objects.push(object);
+    }
+
+    /** Retrieves all objects stored in a layer
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     */
+    getObjects(layerId) {
+        if (!(layerId in this.#layers)) return;
+
+        return this.#layers[layerId].objects;
+    }
+
+    /**
+     * Adds a new tile to the tilemap's tileset
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String} textureId The ID of a loaded resource
+     */
+    addTile(tileId, textureId) {
+        if (tileId in this.#tiles) return;
+
+        let newTile = new Tile(new Texture(textureId), tileId, new Vector(0, 0));
+
+        // Add new tile to the tileset
+        this.#tiles[tileId] = newTile;
+    }
+
+    /**
+     * Changes a tile's ID to the specified one (WARNING: TileIDs on the tilemap, will not be updated, so you need to replace them with the new tile id)
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String} newTileId The new ID of this tile in the tileset
+     */
+    renameTile(tileId, newTileId) {
+        if (!(tileId in this.#tiles)) return;
+
+        // Add new tile
+        this.#tiles[newTileId] = this.#tiles[tileId];
+        this.#tiles[newTileId].id = newTileId;
+
+        // Remove old tile
+        delete this.#tiles[tileId];
+    }
+
+    /**
+     * Removes a tile from the tileset of this tilemap (WARNING: The tile will not be removed from the tilemap)
+     * @param {String} tileId The ID of a tile from the tileset
+     */
+    deleteTile(tileId) {
+        if (!(tileId in this.#tiles)) return;
+
+        delete this.#tiles[tileId];
+    }
+
+    /**
+     * Sets the metadata for a tile in the tileset. Later placed tiles in the grid will inherit it
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String} key The key of the metadata
+     * @param {*} value The value of the metadata
+     */
+    setTileMeta(tileId, key, value) {
+        if (!(tileId in this.#tiles)) return;
+
+        this.#tiles[tileId].meta[key] = value;
+    }
+
+    /**
+     * Returns with the metadata of thisa tile, stored at the specified key, or all metadata if the key is omitted
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String|null} key The key of the metadata or null. If set to null, all metadata will be returned
+     * @returns {*|null} The value at the specified key or null, if no key found or no tile found
+     */
+    getTileMeta(tileId, key = null) {
+        if (!(tileId in this.#tiles)) return null;
+
+        if (key === null) {
+            return this.#tiles[tileId].meta;
+        } else {
+            return this.#tiles[tileId].meta[key] ?? null;
+        }
+    }
+
+    /**
+     * Returns with a tile from the tileset, with the specified ID
+     * @param {String} tileId The ID of a tile from the tileset
+     * @returns {Object} The data of the specified tile from the tileset
+     */
+    getTileById(tileId) {
+        if (!(tileId in this.#tiles)) return null;
+
+        return this.#tiles[tileId];
+    }
+
+    /**
+     * Returns with a tile at the specified atlas coordinates.
+     * @param {Vector} atlasPos The atlas coordinates in the tileset
+     * @returns {Object|null} The tile it self, or null if no tile was found
+     */
+    getTileByAtlasPos(atlasPos) {
+        for (let tileId in this.#tiles) {
+            if (this.#tiles[tileId].atlasPos.isEqual(atlasPos)) return this.#tiles[tileId];
+
+            return null;
+        }
+    }
+
+    /**
+     * Returns with the first tile in the tileset
+     * @returns {Object} The data of the first tile in the tileset (It is NOT necessary the first tile on the atlas texture)
+     */
+    getFirstTile() {
+        if (this.#tiles == {}) return null;
+
+        return this.#tiles[ Object.keys(this.#tiles)[0] ];
+    }
+
+    /**
+     * Returns with an index of a direction
+     * @param {Number|String} direction A direction identifier. Can be a name, like: "top" or an index like: 1
+     * @returns {Number|null} A valid direction index (0-7) or null if the provided direction was invalid
+     */
+    _getAutotileDirectionIndex(direction) {
+        if (direction == direction + 0) {
+            // Direction is a number
+            if (direction < 0) return null;
+            if (direction > 7) return null;
+            return Math.round(direction);
+        } else {
+            // Direction is a string
+            return {
+                "top": 0,
+                "top-right": 1,
+                "right": 2,
+                "bottom-right": 3,
+                "bottom": 4,
+                "bottom-left": 5,
+                "left": 6,
+                "top-left": 7,
+            }[direction] ?? null;
+        }
+    }
+
+    /**
+     * Assigns the autotile values to a tile
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String} layerId The ID of an autotile tileset
+     * @param {Array} neighbors An array of connectionIDs
+     */
+    setTileAutotile(tileId, layerId, neighbors) {
+        let tile = this.getTileById(tileId);
+        if (tile === null) return;
+
+        tile.setAutotile(layerId, neighbors);
+    }
+    
+    /**
+     * Assigns a value for the side of the specified tile, on the specified autotile layer
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String} layerId The ID of an autotile layer
+     * @param {Number|String} direction An edge direction
+     * @param {*} connectionID A connection's value (A value for the side of this tile. Can be anything)
+     */
+    setTileAutotileDirection(tileId, layerId, direction, connectionID) {
+        let tile = this.getTileById(tileId);
+        if (tile === null) return;
+
+        if (!(layerId in tile.autotile)) return;
+
+        tile.autotile[layerId][this._getAutotileDirectionIndex(direction)] = connectionID;
+    }
+
+    /**
+     * Returns with the autotile data of the given tile
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String|null} layerId The ID of an autotile layer (If not specified, then the full autotile data will be returned)
+     * @returns {Object|Array|null} The autotile data of the specified tile or null
+     */
+    getTileAutotile(tileId, layerId = null) {
+        let tile = this.getTileById(tileId);
+        if (tile === null) return null;
+
+        return tile.getAutotile(layerId);
+    }
+    
+    /**
+     * Returns with the possible connecting tiles in the same autotile tileset, for the given tile and the given edge
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {String} layerId The ID of an autotile layer
+     * @param {Number|String} direction An edge direction
+     * @returns {Array} An array of possible connecting tileIDs, from this tilemap's tileset
+     */
+    getAutotile(tileId, layerId, direction) {throw Error("Not implemented")}
+
+
+    // Multi layer
+    
+    getColumnAt(tilePos) {throw Error("Not implemented")} /* dict with a single tile from every layer at the position */
+
+    /**
+     * Sets a tile on the tilemap's specified graphics layer
+     * @param {Number} graphicsLayer The number of a graphics layer
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @param {String} tileId The ID of a tile from the tileset
+     * @param {Object} tileMeta A the tile's metadata to set to (WARNING: If set, it overwrites all existing metadata in that tile!)
+     */
+    setTileAt(graphicsLayer, tilePos, tileId, tileMeta) {
+        let grid = this.getGrid("graphics_"+graphicsLayer);
+
+        if (!grid) return;
+        if (!grid.isInGrid(tilePos.x, tilePos.y)) return;
+
+        let tile = grid.getCell(tilePos.x, tilePos.y);
+        tile.id = tileId;
+        tile.meta = tileMeta ?? this.getTileMeta(tileId) ?? {};
+        grid.setCell(tilePos.x, tilePos.y, tile);
+    }
+
+    /**
+     * Returns with a tile ID from the tilemap's specified layer
+     * @param {Number} graphicsLayer The number of a graphics layer
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @returns {String|null} Returns with a tile ID or null
+     */
+    getTileAt(graphicsLayer, tilePos) {
+        return this.getGrid("graphics_"+graphicsLayer)?.getCell(tilePos.x, tilePos.y, null)?.id ?? null;
+    }
+
+    /**
+     * Sets a tile's metadata on the specified graphics layer 
+     * @param {Number} graphicsLayer The number of a graphics layer
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @param {String} key The key of the metadata
+     * @param {*} value The value of the metadata
+     */
+    setTileMetaAt(graphicsLayer, tilePos, key, value) {
+        let grid = this.getGrid("graphics_"+graphicsLayer);
+
+        if (!grid) return;
+        if (!grid.isInGrid(tilePos.x, tilePos.y)) return;
+
+        let tile = grid.getCell(tilePos.x, tilePos.y);
+        tile.meta[key] = value;
+        //grid.setCell(tilePos.x, tilePos.y, tile);
+    }
+
+    /**
+     * Returns with the metadata of a tile on the tilemap
+     * @param {Number} graphicsLayer The number of a graphics layer
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @param {String|null} key The key of the metadata or null. If set to null, all metadata will be returned
+     * @returns {*|null} The value at the specified key or null, if no key found or no tile found
+     */
+    getTileMetaAt(graphicsLayer, tilePos, key = null) {
+        let grid = this.getGrid("graphics_"+graphicsLayer);
+
+        if (!grid) return;
+        if (!grid.isInGrid(tilePos.x, tilePos.y)) return;
+
+        let tile = grid.getCell(tilePos.x, tilePos.y);
+
+        if (key === null) {
+            return tile.meta;
+        } else {
+            return tile.meta[key] ?? null;
+        }
+    }
+
+    /**
+     * Replaces all tiles on the specified layer with the gicven tile
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     * @param {String} tileId The ID of a tile from the tileset, null, or a simple value if the layer is not a graphical layer
+     */
+    clear(layerId, tileId) {
+        if (layerId.search(/graphics_[0-9]+/g) == 0) {
+            if (tileId === null) {
+                this.#layers[layerId].grid.fill({id: tileId, meta: {}});
+            } else {
+                let tileMeta = this.getTileMeta(tileId);
+                if (!tileMeta) return;
+                this.#layers[layerId].grid.fill({id: tileId, meta: structuredClone(tileMeta)});
+            }
+        } else {
+            this.#layers[layerId].grid.fill(tileId);
+        }
+    }
+
+    fill(layerId, tileId, tilePos) {throw Error("Not implemented")} /* paint bucket. fills only the tile it starts on */
+
+    /**
+     * Executes the provided callback function on each tile on the specified layer
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     * @param {Function} callback The function which will get called on every tile. Parameters:
+     * - x: The X coordinate of the current tile
+     * - y: The Y coordinate of the current tile
+     * - cell: The tile itself
+     */
+    foreach(layerId, callback) {
+        this.getGrid(layerId)?.forEach(callback);
+    }
+
+    /**
+     * Executes the provided callback function on each tile on the specified layer and replaces the tile with the returned value
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     * @param {Function} callback The function which will get called on every tile. Parameters:
+     * - x: The X coordinate of the current tile
+     * - y: The Y coordinate of the current tile
+     * - cell: The tile itself
+     * - The function must return with a valid tile.
+     */
+    map(layerId, callback) {
+        this.getGrid(layerId)?.map(callback);
+    }
+    
+    /**
+     * Returns a new grid with only a few tiles selected from the specified layer
+     * @param {String} layerId The ID of a layer (example: "graphics_0")
+     * @param {Function} callback The function which will get called on every tile. Parameters:
+     * - x: The X coordinate of the current tile
+     * - y: The Y coordinate of the current tile
+     * - cell: The tile itself
+     * - Must return with a boolean value, which determines if the tile will be kept in the returned grid (true) or not (false)
+     * @returns {Grid|null} Returns a copy of the tile layer, with only the filtered tiles there, or null if an error is happened
+     * WARNING: Thge cell values are not cloned, so if the leyer is a graphical layer, then modifying anything in the filtered grid,
+     * will affect the actual layer!
+     */
+    filter(layerId, callback) {
+        let grid = this.getGrid(layerId);
+
+        if (!grid) return null;
+
+        let out = new Grid(grid.width, grid.height, null, grid.hashFunction);
+
+        grid.forEach(function (x, y, tile) {
+            if (callback(x, y, tile)) out.setCell(x, y, tile);
+        });
+
+        return out;
+    }
+
+    /* [[Vector(0,0), Vector(0,1)], [Vector(1,1)]] array of positions. positions are tiles on  an island */
+    getIslands(layerId, emptyTileFunction /* returns a bool, if the tile is empty */) {throw Error("Not implemented")}
+
+    // Special
+    // Collision
+    setTileCollisionAt(collisionLayer, tilePos, value) {
+        if (typeof value != "boolean") return 1;
+
+        let grid = this.getGrid("collision_"+collisionLayer);
+
+        if (!grid) return 2;
+        if (!grid.isInGrid(tilePos.x, tilePos.y)) return 3;
+    
+        grid.setCell(tilePos.x, tilePos.y, value);
+    }
+
+    setAllTileCollision(collisionLayer, tilePos, collisionsOnLayers /* array */) {throw Error("Not implemented")}
+    getTileCollision(collisionLayer, tilePos) {throw Error("Not implemented")}
+    getAllTileCollision(tilePos) {throw Error("Not implemented")} /* ret artray of layer collisions */
+
+    /**
+     * Checks if the specified point is colliding with thge tilemap, on the specified layers
+     * @param {Array} layerIds An array of tile IDs to test for collision (example: "graphics_0")
+     * @param {Vector} point A point on world space to test if it is colliding with the tilemap
+     * @returns {Boolean} Is the point colliding?
+     */
+    isColliding(layerIds, point) {
+        if (layerIds.length == 0) return false;
+        
+        for (let layerId of layerIds) {
+            let grid = this.getGrid(layerId);
+
+            if (grid === null) continue;
+
+            // TODO: Get closest tiles and check for collision
+        }
+
+        return false;
+    }
+
+    // Navigation
+
+    /**
+     * Sets a navigation tile value on the specified navigation layer
+     * @param {Number} navLayer The number of a navigation layer
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @param {Number} travelCost The cost to travel through this tile (Higher values make this tile less visited)
+     * This value can be any number, the ratio between tiles, is what matters. (generally 1 means a wall and 0 means a clear way)
+     */
+    setTileNavigationAt(navLayer, tilePos, travelCost /* high makes a wall */) {
+        if (typeof travelCost != "number") return 1;
+
+        let grid = this.getGrid("navigation_"+navLayer);
+
+        if (!grid) return 2;
+        if (!grid.isInGrid(tilePos.x, tilePos.y)) return 3;
+    
+        grid.setCell(tilePos.x, tilePos.y, travelCost);
+    }
+
+    /**
+     * Returns with the travel cost of a tile
+     * @param {Number} navLayer The number of a navigation layer
+     * @param {Vector} tilePos The tile position on the tilemap
+     * @returns {Number|null} The cost to travel through this tile, or null if the tile is invalid
+     */
+    getTileNavigationAt(navLayer, tilePos) {
+        let grid = this.getGrid("navigation_"+navLayer);
+
+        if (!grid) return null;
+        if (!grid.isInGrid(tilePos.x, tilePos.y)) return null;
+
+        return grid.getCell(tilePos.x, tilePos.y);
+    }
+
+    /**
+     * Searches for a path between the 2 points
+     * @param {Number} navLayer The number of a navigation layer, to calculate travel cost on
+     * @param {Vector} startPos A tile position on the tilemap
+     * @param {Vector} endPos A tile position on the tilemap
+     * @param {String} algorithm The pathfinding algorithm. Possible values:
+     * - "astar" For A* pathfinding
+     * @param {Number} jitter This vlaue "randomises" the path. 0 means that from the same start and end points, the path will be the same.
+     * Any value higher makes the path choose different routes, but stiull respecting the travel cost of each cell
+     * (values 5 or higher, usually leads to the path going wherever it wnats)
+     * @returns {Object|null} If no path if found between the 2 points, this function will return null.
+     * Otherwise it will return an Object with the following structure:  
+     * {"tiles": [], "points": []}
+     * Where the tiles array is a list of tile coordinates the found path goes through and the points array is an array of world space points
+     * along the path
+     */
+    findPath(navLayer, startPos, endPos, algorithm = "astar", jitter = 0) {
+        /*
+        function reconstruct_path(cameFrom, current)
+        total_path := {current}
+        while current in cameFrom.Keys:
+            current := cameFrom[current]
+            total_path.prepend(current)
+        return total_path
+
+        // A* finds a path from start to goal.
+        // h is the heuristic function. h(n) estimates the cost to reach goal from node n.
+        function A_Star(start, goal, h)
+            // The set of discovered nodes that may need to be (re-)expanded.
+            // Initially, only the start node is known.
+            // This is usually implemented as a min-heap or priority queue rather than a hash-set.
+            openSet := {start}
+
+            // For node n, cameFrom[n] is the node immediately preceding it on the cheapest path from the start
+            // to n currently known.
+            cameFrom := an empty map
+
+            // For node n, gScore[n] is the currently known cost of the cheapest path from start to n.
+            gScore := map with default value of Infinity
+            gScore[start] := 0
+
+            // For node n, fScore[n] := gScore[n] + h(n). fScore[n] represents our current best guess as to
+            // how cheap a path could be from start to finish if it goes through n.
+            fScore := map with default value of Infinity
+            fScore[start] := h(start)
+
+            while openSet is not empty
+                // This operation can occur in O(Log(N)) time if openSet is a min-heap or a priority queue
+                current := the node in openSet having the lowest fScore[] value
+                if current = goal
+                    return reconstruct_path(cameFrom, current)
+
+                openSet.Remove(current)
+                for each neighbor of current
+                    // d(current,neighbor) is the weight of the edge from current to neighbor
+                    // tentative_gScore is the distance from start to the neighbor through current
+                    tentative_gScore := gScore[current] + d(current, neighbor)
+                    if tentative_gScore < gScore[neighbor]
+                        // This path to neighbor is better than any previous one. Record it!
+                        cameFrom[neighbor] := current
+                        gScore[neighbor] := tentative_gScore
+                        fScore[neighbor] := tentative_gScore + h(neighbor)
+                        if neighbor not in openSet
+                            openSet.add(neighbor)
+
+            // Open set is empty but goal was never reached
+            return failure
+        */
+
+        let self = this;
+
+        // Helper
+        function posToString(tilePos) {
+            return `${tilePos.x};${tilePos.y}`;
+        }
+
+        function stringToPos(string) {
+            return new Vector(parseInt(string.split(";")[0]), parseInt(string.split(";")[1]));
+        }
+
+        function generatePath(cameFrom, current) {
+            let tiles = [current];
+            let points = [self.tileCenterToWorld(current)];
+
+            current = posToString(current);
+
+            let visited = new Set();
+
+            while (current in cameFrom) {
+                if (visited.has(current)) return null;
+                let old = current;
+                current = cameFrom[current];
+                points.unshift(self.tileCenterToWorld(current));
+                tiles.unshift(current);
+                visited.add(old);
+                current = posToString(current);
+            }
+
+            return {
+                tiles: tiles,
+                points: points
+            };
+        }
+
+        function heuristics(tilePos) {
+            return Math.sqrt(Math.pow(Math.abs(endPos.x - tilePos.x), 2) + Math.pow(Math.abs(endPos.y - tilePos.y), 2)) / 2 + randFloat(0, jitter);
+        }
+
+        let cameFrom = {};
+        let tilesToCheck = [posToString(startPos)];
+
+        let gScore = {}
+        gScore[posToString(startPos)] = 0;
+
+        let fScore = {}
+        fScore[posToString(startPos)] = heuristics(startPos);
+
+        let neighbors = [
+            new Vector(0, -1), // top
+            new Vector(1, 0), // right
+            new Vector(0, 1), // bottom
+            new Vector(-1, 0), // left
+        ];
+
+        // Max iter number
+        let iter = 10000;
+
+        while (tilesToCheck.length && iter-- > 0) {
+            // Lowest FScore value
+            let lowesF = tilesToCheck[0];
+
+            for (let key in fScore) {
+                if (fScore[key] < fScore[lowesF]) lowesF = key;
+            }
+
+            //console.log(iter, lowesF);
+
+            // Current tile is the one with the lowest FScore value
+            let currentTilePos = stringToPos(lowesF);
+
+            if (currentTilePos.isEqual(endPos)) return generatePath(cameFrom, currentTilePos);
+
+            delete fScore[lowesF];
+            tilesToCheck = tilesToCheck.filter(t => t != lowesF);
+
+            // For each neighbor
+            /*
+             // d(current,neighbor) is the weight of the edge from current to neighbor
+                    // tentative_gScore is the distance from start to the neighbor through current
+                    tentative_gScore := gScore[current] + d(current, neighbor)
+                    if tentative_gScore < gScore[neighbor]
+                        // This path to neighbor is better than any previous one. Record it!
+                        cameFrom[neighbor] := current
+                        gScore[neighbor] := tentative_gScore
+                        fScore[neighbor] := tentative_gScore + h(neighbor)
+                        if neighbor not in openSet
+                            openSet.add(neighbor)
+            
+            */
+
+            for (let neighborOffset of neighbors) {
+                let neighborPos = currentTilePos.add(neighborOffset);
+
+                // Color visited tiles
+                this.setTileCollisionAt(0, neighborPos, true);
+
+                let neighborTravelCost = this.getTileNavigationAt(navLayer, neighborPos);
+                if (neighborTravelCost === null) continue; // Ignore tile outside of the map
+
+                let tentative_neigborScore = (gScore[posToString(currentTilePos)] ?? Infinity) + neighborTravelCost;
+                //console.log(neighborPos, neighborTravelCost, tentative_neigborScore, gScore[posToString(neighborPos)] ?? Infinity);
+
+                if (tentative_neigborScore < (gScore[posToString(neighborPos)] ?? Infinity)) {
+                    // Create backtrack link
+                    cameFrom[posToString(neighborPos)] = currentTilePos;
+
+                    gScore[posToString(neighborPos)] = tentative_neigborScore;
+                    fScore[posToString(neighborPos)] = tentative_neigborScore + heuristics(neighborPos);
+
+                    let nPos = posToString(neighborPos);
+                    if (!tilesToCheck.includes(nPos)) tilesToCheck.push(nPos);
+                }
+            }
+
+        }
+
+        return null;
+    } 
+
+    _updateCollision(collisionLayer /* null to update all layers */) {throw Error("Not implemented")} /* greedy meshes collision layers */
+    _updateNavigation(navLayer /* null to update all layers */) {throw Error("Not implemented")} /* greedy meshes nav layers */
+
+    /**
+     * Updates the tile animations
+     */
+    update() {
+        for (let tileId in this.#tiles) {
+            this.#tiles[tileId].update();
+        }
+    }
+
+    /**
+     * Renders all tiles on the tilemap on to the main canvas
+     * @param {String} gridColor A color to draw the grid lines with (if null, no gridlines wil be drawn)
+     * @param {Number} gridThickness The thickness of the gridlines (in pixels)
+     * @param {Boolean} collision Render collision layers? (debug option)
+     * @param {Boolean} navigation  Render navigation layers? (debug option)
+     */
+    render(gridColor = null, gridThickness = null, collision = false, navigation = false) {
+        /*
+        Layer render order:
+        (always) graphics_1 to graphics_n
+        (debug) collision_1 to collision_n
+        (debug) nav_1 to nav_1
+        
+        Tiles, then objects on top
+        */
+
+        let self = this;
+
+        for (let layerId of this.getLayers("graphics")) {
+            // Render tiles
+            this.getGrid(layerId).forEach(function (x, y, tile) {
+                if (tile.id === null) return;
+
+                let tilePos = new Vector(
+                    self.pos.x + x * self.tileWidth,
+                    self.pos.y + y * self.tileHeight
+                );
+
+                /*ctx.drawImage(
+                    self.getTileById(tile.id).texture,
+                    ...camera.w2c(tilePos).toArray(), ...camera.w2cs(self.tileSize).toArray()
+                );*/
+
+                camera.renderTexture(self.getTileById(tile.id).texture, ...tilePos.toArray(), self.tileWidth, self.tileHeight);
+            });
+        }
+
+        if (collision) {
+            for (let layerId of this.getLayers("collision")) {
+                // Render tiles
+                this.getGrid(layerId).forEach(function (x, y, tile) {
+                    if (tile === null) return;
+    
+                    let tilePos = new Vector(
+                        self.pos.x + x * self.tileWidth,
+                        self.pos.y + y * self.tileHeight
+                    );
+    
+                    ctx.fillStyle = `rgba(0, 100, 255, ${tile / 2})`;
+                    
+                    ctx.fillRect(...camera.w2cf(tilePos, self.tileSize));
+                });
+    
+                // Render objects
+                for (let obj of this.#layers[layerId].objects) {
+                    obj.render();
+                };
+            }
+        }
+
+        if (navigation) {
+            let tileInset = 1; // Size of the inset for the nav tiles
+
+            for (let layerId of this.getLayers("navigation")) {
+                // Render tiles
+                this.getGrid(layerId).forEach(function (x, y, tile) {
+                    if (tile === null) return;
+    
+                    let tilePos = new Vector(
+                        self.pos.x + x * self.tileWidth + (tileInset / 2),
+                        self.pos.y + y * self.tileHeight + (tileInset / 2)
+                    );
+    
+                    ctx.fillStyle = `rgba(255, 0, 0, ${tile / 2})`;
+                    ctx.fillRect(...camera.w2cf(tilePos, self.tileSize.sub(new Vector(tileInset))));
+                });
+    
+                // Render objects
+                for (let obj of this.#layers[layerId].objects) {
+                    obj.render();
+                };
+            }
+        }
+
+        if (gridColor != null) {
+            ctx.strokeStyle = gridColor;
+            ctx.lineWidth = camera.w2csX(gridThickness);
+            ctx.lineJoin = "butt";
+            ctx.lineCap = "butt";
+
+            // Horizontal lines
+            for (let y = 0; y <= this.#height; y++) {
+                ctx.beginPath();
+                ctx.moveTo(...camera.w2cXY(this.left, this.pos.y + y * this.tileHeight));
+                ctx.lineTo(...camera.w2cXY(this.right, this.pos.y + y * this.tileHeight));
+                ctx.stroke();
+            }
+
+            // Vertical lines
+            for (let x = 0; x <= this.#width; x++) {
+                ctx.beginPath();
+                ctx.moveTo(...camera.w2cXY(this.pos.x + x * this.tileWidth, this.top));
+                ctx.lineTo(...camera.w2cXY(this.pos.x + x * this.tileWidth, this.bottom));
+                ctx.stroke();
+            }
+        }
+    }
+}
